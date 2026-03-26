@@ -1,0 +1,15 @@
+[project]
+name = "pretrain-probes"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.0",
+    "transformer_lens",
+    "transformers",
+    "accelerate",
+    "scikit-learn",
+    "pandas",
+    "numpy",
+    "tqdm",
+    "safetensors",
+]
