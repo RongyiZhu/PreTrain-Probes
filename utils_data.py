@@ -31,12 +31,12 @@ MODEL_CONFIG = {
     },
     "pythia-160m": {
         "hf_model_path": "EleutherAI/pythia-160m",
-        "hook_layers": [1, 4, 5, 7, 8, 10, 11],
+        "hook_layers": [1, 2, 4, 5, 6, 7, 8, 9, 10, 11],
         "include_embed": False
     },
     "pythia-410m": {
         "hf_model_path": "EleutherAI/pythia-410m",
-        "hook_layers": [2, 10, 14, 17, 19, 22, 23],
+        "hook_layers": [2, 5, 7, 10, 12, 14, 17, 19, 22, 23],
         "include_embed": False
     },
     "pythia-1b": {
@@ -51,12 +51,17 @@ MODEL_CONFIG = {
     },
     "pythia-2.8b": {
         "hf_model_path": "EleutherAI/pythia-2.8b",
-        "hook_layers": [3, 10, 13, 19, 22, 29, 31],
+        "hook_layers": [3, 6, 10, 13, 16, 19, 22, 26, 29, 31],
         "include_embed": False
     },
     "pythia-6.9b": {
         "hf_model_path": "EleutherAI/pythia-6.9b",
         "hook_layers": [3, 6, 10, 13, 16, 19, 22, 26, 29, 31],
+        "include_embed": False
+    },
+    "pythia-12b": {
+        "hf_model_path": "EleutherAI/pythia-12b",
+        "hook_layers": [3, 7, 11, 15, 18, 22, 25, 29, 32, 35],
         "include_embed": False
     },
     "olmo-1-1b": {

@@ -25,11 +25,11 @@ revision_list=(
 #model_name=("pythia-70m")
 model_name=(
   #"pythia-70m"
-  "pythia-160m"
+  #"pythia-160m"
   #"pythia-410m"
   #"pythia-1b"
   #"pythia-2.8b"
-  #"pythia-6.9b"
+  "pythia-6.9b"
   #"pythia-12b"
 )
 
@@ -46,10 +46,12 @@ for model in "${model_name[@]}"; do
     python generate_activations.py \
       --model_name "$model" \
       --revision "$revision" \
-      --devices cuda:0,cuda:1 \
+      --devices cuda:3 \
       --max_seq_len 1024
   done
+done
 
+for model in "${model_name[@]}"; do
   # Stage 2: Train probes for all revisions at once (batched)
   echo "=============================="
   echo " Training probes: all revisions batched  [$(date)]"
