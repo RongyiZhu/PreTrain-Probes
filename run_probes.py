@@ -12,15 +12,21 @@ Usage:
 
     # Batched revisions (all trained together)
     python run_probes.py --model_name pythia-70m --revision step0 step1 step16 step128 step143000
+
+    # Multi-GPU: split revisions across devices
+    python run_probes.py --model_name pythia-70m --revision step0 step1 step16 step128 --devices cuda:4,cuda:5
 """
 
 import os
 import argparse
+import multiprocessing
+from multiprocessing import Process
 
 import pandas as pd
 from tqdm import tqdm
 
 from utils_data import get_xy_traintest, get_numbered_binary_tags, get_dataset_sizes, get_layers, get_datasets
+import utils_probes
 from utils_probes import find_best_logreg, find_best_mlp
 
 dataset_sizes = get_dataset_sizes()
@@ -153,18 +159,60 @@ def coalesce_results(model_name):
             )
 
 
+# ─────────────────────── Multi-GPU worker ─────────────────────────────────
+
+def _worker(device, revision_fullnames, all_datasets, datasets_by_rev, do_logreg, do_mlp, revisions_per_batch):
+    """Worker process: train probes for a subset of revisions on a single GPU."""
+    utils_probes.set_device(device)
+    layers = get_layers(revision_fullnames[0])
+
+    # Chunk revisions to limit GPU memory usage
+    rev_chunks = [revision_fullnames[i:i+revisions_per_batch]
+                  for i in range(0, len(revision_fullnames), revisions_per_batch)]
+
+    for chunk_idx, rev_chunk in enumerate(rev_chunks):
+        n_revs = len(rev_chunk)
+        chunk_label = f"[{device}] chunk {chunk_idx+1}/{len(rev_chunks)}"
+
+        if do_logreg:
+            print(f"{chunk_label} [Logreg] {len(all_datasets)} datasets, {len(layers)} layers, {n_revs} revisions (M={len(layers)*n_revs})")
+            for ds in tqdm(all_datasets, desc=f"{chunk_label} Logreg"):
+                revs = [fn for fn in rev_chunk if ds in datasets_by_rev[fn]]
+                if revs:
+                    _run_probe_for_dataset_batched(ds, revs, 'logreg', find_best_logreg)
+
+        if do_mlp:
+            print(f"{chunk_label} [MLP] {len(all_datasets)} datasets, {len(layers)} layers, {n_revs} revisions (M={len(layers)*n_revs})")
+            for ds in tqdm(all_datasets, desc=f"{chunk_label} MLP"):
+                revs = [fn for fn in rev_chunk if ds in datasets_by_rev[fn]]
+                if revs:
+                    _run_probe_for_dataset_batched(ds, revs, 'mlp', find_best_mlp)
+
+    for fn in revision_fullnames:
+        coalesce_results(fn)
+    print(f"[{device}] Done.")
+
+
 # ─────────────────────── Main ────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--revision", type=str, nargs='+', required=True)
+    parser.add_argument("--devices", type=str, nargs="*", default=["cuda:0"],
+                        help="GPU devices (space or comma separated, e.g. cuda:4,cuda:5)")
+    parser.add_argument("--revisions_per_batch", type=int, default=2,
+                        help="Max revisions per GPU call to limit memory (default: 2, M_max = layers * this)")
     parser.add_argument("--logreg_only", action="store_true")
     parser.add_argument("--mlp_only", action="store_true")
     args = parser.parse_args()
 
+    if len(args.devices) == 1 and ',' in args.devices[0]:
+        devices = [d.strip() for d in args.devices[0].split(',')]
+    else:
+        devices = args.devices
+
     revision_fullnames = [f'{args.model_name}_rev{r}' for r in args.revision]
-    n_revs = len(revision_fullnames)
 
     # Gather datasets available per revision, then take union
     datasets_by_rev = {}
@@ -172,27 +220,35 @@ def main():
         datasets_by_rev[fn] = set(get_datasets(fn))
     all_datasets = sorted(set.union(*datasets_by_rev.values()))
 
-    layers = get_layers(revision_fullnames[0])
-
     do_logreg = not args.mlp_only
     do_mlp = not args.logreg_only
 
-    if do_logreg:
-        print(f"[Logreg] {len(all_datasets)} datasets, {len(layers)} layers, {n_revs} revisions (M_max={len(layers)*n_revs})")
-        for ds in tqdm(all_datasets, desc="Logreg batched"):
-            revs = [fn for fn in revision_fullnames if ds in datasets_by_rev[fn]]
-            _run_probe_for_dataset_batched(ds, revs, 'logreg', find_best_logreg)
+    # Split revisions across GPUs
+    num_gpus = len(devices)
+    revisions_per_gpu = [[] for _ in range(num_gpus)]
+    for i, fn in enumerate(revision_fullnames):
+        revisions_per_gpu[i % num_gpus].append(fn)
 
-    if do_mlp:
-        print(f"[MLP] {len(all_datasets)} datasets, {len(layers)} layers, {n_revs} revisions (M_max={len(layers)*n_revs})")
-        for ds in tqdm(all_datasets, desc="MLP batched"):
-            revs = [fn for fn in revision_fullnames if ds in datasets_by_rev[fn]]
-            _run_probe_for_dataset_batched(ds, revs, 'mlp', find_best_mlp)
+    for device, revs in zip(devices, revisions_per_gpu):
+        print(f"  {device}: {len(revs)} revisions — {[r.split('_rev')[1] for r in revs]}")
 
-    for fn in revision_fullnames:
-        coalesce_results(fn)
-    print("Done.")
+    rpb = args.revisions_per_batch
+    if num_gpus == 1:
+        _worker(devices[0], revision_fullnames, all_datasets, datasets_by_rev, do_logreg, do_mlp, rpb)
+    else:
+        processes = []
+        for device, revs in zip(devices, revisions_per_gpu):
+            if not revs:
+                continue
+            p = Process(target=_worker, args=(device, revs, all_datasets, datasets_by_rev, do_logreg, do_mlp, rpb))
+            p.start()
+            processes.append(p)
+        for p in processes:
+            p.join()
+
+    print("All done.")
 
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method('spawn')
     main()

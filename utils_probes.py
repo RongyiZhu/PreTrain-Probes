@@ -22,6 +22,11 @@ from sklearn.metrics import roc_auc_score, f1_score, accuracy_score, log_loss
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def set_device(device):
+    global DEVICE
+    DEVICE = device
+
+
 # ─────────────────────── Model architecture ───────────────────────────────
 
 class MultiLinear(nn.Module):

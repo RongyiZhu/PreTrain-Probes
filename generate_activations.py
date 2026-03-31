@@ -36,7 +36,7 @@ def load_model(model_name, device, revision=None):
     return HookedTransformer.from_pretrained(config["hf_model_path"], device=device, **kwargs)
 
 
-def process_single_dataset(dataset_name, model_name, device, max_seq_len, hook_names, revision=None):
+def process_single_dataset(dataset_name, model, tokenizer, model_name, device, max_seq_len, hook_names, revision=None, batch_size=32):
     try:
         dataset = pd.read_csv(dataset_name)
         if "prompt" not in dataset.columns:
@@ -56,27 +56,24 @@ def process_single_dataset(dataset_name, model_name, device, max_seq_len, hook_n
             if all(l == len(text) for l in lengths):
                 return f"Skipping {dataset_short_name} (activations exist)"
 
-        model = load_model(model_name, device, revision=revision)
-        tokenizer = model.tokenizer
-        tokenizer.truncation_side = 'left'
-        tokenizer.padding_side = 'right'
-
-        text_lengths = [len(tokenizer(t)['input_ids']) for t in text]
+        # Tokenize once upfront, reuse for batching
+        tokenized = tokenizer(text, padding=False, truncation=True, max_length=max_seq_len)
+        text_lengths = [len(ids) for ids in tokenized['input_ids']]
 
         print(f"[GPU {device}] Generating activations for {dataset_short_name}")
 
         all_activations = {hook: [] for hook in hook_names}
-        bar = tqdm(range(0, len(text), 1), desc=f"[GPU {device}] {dataset_short_name}")
+        bar = tqdm(range(0, len(text), batch_size), desc=f"[GPU {device}] {dataset_short_name}")
         for i in bar:
-            batch_text = text[i:i+1]
-            batch_lengths = text_lengths[i:i+1]
+            batch_text = text[i:i+batch_size]
+            batch_lengths = text_lengths[i:i+batch_size]
             batch = tokenizer(batch_text, padding=True, truncation=True,
                               max_length=max_seq_len, return_tensors="pt").to(device)
             _, cache = model.run_with_cache(batch["input_ids"], names_filter=hook_names)
             for j, length in enumerate(batch_lengths):
                 pos = min(length - 1, max_seq_len - 1)
                 for hook in hook_names:
-                    all_activations[hook].append(cache[hook][:, pos].cpu())
+                    all_activations[hook].append(cache[hook][j, pos].unsqueeze(0).cpu())
 
         for hook, fname in zip(hook_names, file_names):
             torch.save(torch.cat(all_activations[hook]), fname)
@@ -86,20 +83,26 @@ def process_single_dataset(dataset_name, model_name, device, max_seq_len, hook_n
         return f"[GPU {device}] Error processing {dataset_name}: {e}"
 
 
-def worker_process(datasets, model_name, device, max_seq_len, revision=None):
+def worker_process(datasets, model_name, device, max_seq_len, revision=None, batch_size=32):
     revision_suffix = f"_rev{revision}" if revision else ""
     os.makedirs(f"data/model_activations_{model_name}{revision_suffix}", exist_ok=True)
     hook_names = get_hook_names(model_name)
 
+    # Load model once for all datasets on this GPU
+    model = load_model(model_name, device, revision=revision)
+    tokenizer = model.tokenizer
+    tokenizer.truncation_side = 'left'
+    tokenizer.padding_side = 'right'
+
     results = []
     for dataset_name in datasets:
-        result = process_single_dataset(dataset_name, model_name, device, max_seq_len, hook_names, revision)
+        result = process_single_dataset(dataset_name, model, tokenizer, model_name, device, max_seq_len, hook_names, revision, batch_size)
         results.append(result)
         print(result)
     return results
 
 
-def generate_activations(model_name, devices, max_seq_len=1024, revision=None):
+def generate_activations(model_name, devices, max_seq_len=1024, revision=None, batch_size=32):
     dataset_names = glob.glob("data/cleaned_data/*.csv")
     random.shuffle(dataset_names)
 
@@ -125,7 +128,7 @@ def generate_activations(model_name, devices, max_seq_len=1024, revision=None):
     for device, ds in zip(devices, datasets_per_gpu):
         print(f"  GPU {device}: {len(ds)} datasets")
 
-    worker_args = [(ds, model_name, dev, max_seq_len, revision)
+    worker_args = [(ds, model_name, dev, max_seq_len, revision, batch_size)
                    for ds, dev in zip(datasets_per_gpu, devices)]
 
     with Pool(processes=num_gpus) as pool:
@@ -144,6 +147,8 @@ if __name__ == "__main__":
                         help="GPU devices (space or comma separated)")
     parser.add_argument("--max_seq_len", type=int, default=1024)
     parser.add_argument("--revision", type=str, default=None)
+    parser.add_argument("--batch_size", type=int, default=32,
+                        help="Batch size for activation extraction (default: 32)")
     args = parser.parse_args()
 
     if len(args.devices) == 1 and ',' in args.devices[0]:
@@ -151,4 +156,4 @@ if __name__ == "__main__":
     else:
         devices = args.devices
 
-    generate_activations(args.model_name, devices, args.max_seq_len, args.revision)
+    generate_activations(args.model_name, devices, args.max_seq_len, args.revision, args.batch_size)

@@ -33,23 +33,24 @@ model_name=(
   #"pythia-12b"
 )
 
-for model in "${model_name[@]}"; do
-  echo "=============================="
-  echo " Processing model: $model"
-  echo "=============================="
+# for model in "${model_name[@]}"; do
+#   echo "=============================="
+#   echo " Processing model: $model"
+#   echo "=============================="
 
-  # Stage 1: Generate activations for all revisions
-  for revision in "${revision_list[@]}"; do
-    echo "=============================="
-    echo " Generating activations: $revision  [$(date)]"
-    echo "=============================="
-    python generate_activations.py \
-      --model_name "$model" \
-      --revision "$revision" \
-      --devices cuda:3 \
-      --max_seq_len 1024
-  done
-done
+#   # Stage 1: Generate activations for all revisions
+#   for revision in "${revision_list[@]}"; do
+#     echo "=============================="
+#     echo " Generating activations: $revision  [$(date)]"
+#     echo "=============================="
+#     python generate_activations.py \
+#       --model_name "$model" \
+#       --revision "$revision" \
+#       --devices cuda:4,cuda:5 \
+#       --max_seq_len 1024 \
+#       --batch_size 8
+#   done
+# done
 
 for model in "${model_name[@]}"; do
   # Stage 2: Train probes for all revisions at once (batched)
@@ -58,7 +59,8 @@ for model in "${model_name[@]}"; do
   echo "=============================="
   python run_probes.py \
     --model_name "$model" \
-    --revision "${revision_list[@]}"
+    --revision "${revision_list[@]}" \
+    --devices cuda:4,cuda:5
 
   echo "[SUCCESS] $model done."
 done
